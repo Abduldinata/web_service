@@ -269,8 +269,66 @@ function deleteSheetRow(string $rowId): void
     ]);
 }
 
+function getStatusLabel(array $row): string
+{
+    return (string) ($row['status'] ?? '');
+}
+
+function filterSheetRows(array $rows, string $search, string $status): array
+{
+    return array_values(array_filter($rows, static function (array $row) use ($search, $status): bool {
+        $matchesSearch = true;
+        $matchesStatus = true;
+
+        if ($search !== '') {
+            $haystack = strtolower(trim((string) ($row['name'] ?? '') . ' ' . (string) ($row['email'] ?? '') . ' ' . (string) ($row['status'] ?? '')));
+            $matchesSearch = str_contains($haystack, strtolower($search));
+        }
+
+        if ($status !== '' && $status !== 'all') {
+            $matchesStatus = strtolower(getStatusLabel($row)) === strtolower($status);
+        }
+
+        return $matchesSearch && $matchesStatus;
+    }));
+}
+
+function exportRowsAsCsv(array $rows): never
+{
+    header('Content-Type: text/csv; charset=UTF-8');
+    header('Content-Disposition: attachment; filename="google-sheets-data.csv"');
+
+    $output = fopen('php://output', 'wb');
+    if ($output === false) {
+        exit;
+    }
+
+    fwrite($output, "\xEF\xBB\xBF");
+    fputcsv($output, ['id', 'name', 'email', 'status']);
+
+    foreach ($rows as $row) {
+        fputcsv($output, [
+            (string) ($row['id'] ?? ''),
+            (string) ($row['name'] ?? ''),
+            (string) ($row['email'] ?? ''),
+            (string) ($row['status'] ?? ''),
+        ]);
+    }
+
+    fclose($output);
+    exit;
+}
+
 $flash = null;
 $flashType = 'info';
+$searchQuery = trim((string) ($_GET['search'] ?? ''));
+$statusFilter = trim((string) ($_GET['status'] ?? 'all'));
+$allowedStatuses = ['all', 'active', 'inactive', 'pending'];
+
+if (!in_array($statusFilter, $allowedStatuses, true)) {
+    $statusFilter = 'all';
+}
+
 $requestMethod = $_SERVER['REQUEST_METHOD'] ?? 'GET';
 
 if ($requestMethod === 'POST') {
@@ -303,10 +361,17 @@ if ($requestMethod === 'POST') {
     } catch (\Throwable $e) {
         $flashType = 'error';
         $flash = 'Error: ' . $e->getMessage();
+        $loadError = $e->getMessage();
+        $filteredItems = [];
     }
 }
 
 $items = fetchSheetRows();
+$filteredItems = filterSheetRows($items, $searchQuery, $statusFilter);
+
+if (isset($_GET['export']) && $_GET['export'] === 'csv') {
+    exportRowsAsCsv($filteredItems);
+}
 
 $formMode = 'create';
 $selectedItem = null;
@@ -321,16 +386,15 @@ if ($editId !== '') {
     }
 }
 
-$totalItems = count($items);
-$activeCount = 0;
-$inactiveCount = 0;
-foreach ($items as $item) {
-    if ($item['status'] === 'active') {
-        $activeCount++;
-    } elseif ($item['status'] === 'inactive') {
-        $inactiveCount++;
-    }
-}
+$totalItems = count($filteredItems);
+$allItemsCount = count($items);
+$activeItems = count(array_filter($filteredItems, static fn (array $item): bool => strtolower(getStatusLabel($item)) === 'active'));
+$statusGroups = count(array_unique(array_map(static fn (array $item): string => strtolower(getStatusLabel($item)), $filteredItems)));
+$heroItem = $items[0] ?? null;
+$performers = array_slice($filteredItems, 0, 3);
+$renderStamp = date('Y-m-d H:i:s');
+
+$exportUrl = 'index.php?export=csv&search=' . urlencode($searchQuery) . '&status=' . urlencode($statusFilter);
 ?>
 <!DOCTYPE html>
 <html lang="id">
@@ -396,14 +460,14 @@ foreach ($items as $item) {
                                     <span class="metric-icon">&#10003;</span>
                                     <div>
                                         <small>Active</small>
-                                        <strong><?= h((string) $activeCount) ?></strong>
+                                        <strong><?= h((string) $activeItems) ?></strong>
                                     </div>
                                 </div>
                                 <div class="metric-item">
                                     <span class="metric-icon">&#10007;</span>
                                     <div>
-                                        <small>Inactive</small>
-                                        <strong><?= h((string) $inactiveCount) ?></strong>
+                                        <small>Total All</small>
+                                        <strong><?= h((string) $allItemsCount) ?></strong>
                                     </div>
                                 </div>
                             </div>
@@ -489,8 +553,33 @@ foreach ($items as $item) {
                 <div class="table-card">
                     <div class="table-head">
                         <h3>Data dari Google Sheets</h3>
-                        <span class="soft-badge"><?= h((string) $totalItems) ?></span>
+                        <div class="table-actions">
+                            <span class="soft-badge"><?= h((string) $totalItems) ?></span>
+                            <a href="<?= h($exportUrl) ?>" class="ghost">Export CSV</a>
+                            <a href="index.php" class="ghost">Reset Filter</a>
+                        </div>
                     </div>
+                    <form method="get" class="filter-form">
+                        <div class="filter-grid">
+                            <div>
+                                <label for="search">Cari data</label>
+                                <input type="text" id="search" name="search" value="<?= h($searchQuery) ?>" placeholder="Cari nama, email, atau status">
+                            </div>
+                            <div>
+                                <label for="status_filter">Filter status</label>
+                                <select id="status_filter" name="status">
+                                    <?php foreach ($allowedStatuses as $statusOption): ?>
+                                        <option value="<?= h($statusOption) ?>" <?= $statusFilter === $statusOption ? 'selected' : '' ?>>
+                                            <?= h(ucfirst($statusOption)) ?>
+                                        </option>
+                                    <?php endforeach; ?>
+                                </select>
+                            </div>
+                            <div class="filter-submit">
+                                <button type="submit" class="primary">Terapkan</button>
+                            </div>
+                        </div>
+                    </form>
                     <div class="table-wrap">
                         <table>
                             <thead>
@@ -503,7 +592,7 @@ foreach ($items as $item) {
                                 </tr>
                             </thead>
                             <tbody>
-                                <?php foreach ($items as $item): ?>
+                                <?php foreach ($filteredItems as $item): ?>
                                     <tr>
                                         <td><?= h((string) $item['id']) ?></td>
                                         <td><?= h($item['name']) ?></td>
@@ -519,9 +608,9 @@ foreach ($items as $item) {
                                         </td>
                                     </tr>
                                 <?php endforeach; ?>
-                                <?php if ($totalItems === 0): ?>
+                                <?php if ($filteredItems === []): ?>
                                     <tr>
-                                        <td colspan="5" style="text-align:center; color:var(--muted);">Belum ada data. Tambah data lewat form di atas.</td>
+                                        <td colspan="5" class="empty-cell">Tidak ada data yang cocok dengan pencarian atau filter.</td>
                                     </tr>
                                 <?php endif; ?>
                             </tbody>

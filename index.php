@@ -293,6 +293,31 @@ function filterSheetRows(array $rows, string $search, string $status): array
     }));
 }
 
+function sortSheetRows(array $rows, string $sortBy, string $sortDirection): array
+{
+    usort($rows, static function (array $left, array $right) use ($sortBy, $sortDirection): int {
+        $leftValue = match ($sortBy) {
+            'id' => (int) ($left['id'] ?? 0),
+            'email' => strtolower((string) ($left['email'] ?? '')),
+            'status' => strtolower((string) ($left['status'] ?? '')),
+            default => strtolower((string) ($left['name'] ?? '')),
+        };
+
+        $rightValue = match ($sortBy) {
+            'id' => (int) ($right['id'] ?? 0),
+            'email' => strtolower((string) ($right['email'] ?? '')),
+            'status' => strtolower((string) ($right['status'] ?? '')),
+            default => strtolower((string) ($right['name'] ?? '')),
+        };
+
+        $result = $leftValue <=> $rightValue;
+
+        return $sortDirection === 'desc' ? -$result : $result;
+    });
+
+    return $rows;
+}
+
 function exportRowsAsCsv(array $rows): never
 {
     header('Content-Type: text/csv; charset=UTF-8');
@@ -327,6 +352,19 @@ $allowedStatuses = ['all', 'active', 'inactive', 'pending'];
 
 if (!in_array($statusFilter, $allowedStatuses, true)) {
     $statusFilter = 'all';
+}
+
+$sortBy = trim((string) ($_GET['sort_by'] ?? 'name'));
+$sortDirection = trim((string) ($_GET['sort_dir'] ?? 'asc'));
+$allowedSortFields = ['id', 'name', 'email', 'status'];
+$allowedSortDirections = ['asc', 'desc'];
+
+if (!in_array($sortBy, $allowedSortFields, true)) {
+    $sortBy = 'name';
+}
+
+if (!in_array($sortDirection, $allowedSortDirections, true)) {
+    $sortDirection = 'asc';
 }
 
 $requestMethod = $_SERVER['REQUEST_METHOD'] ?? 'GET';
@@ -368,6 +406,7 @@ if ($requestMethod === 'POST') {
 
 $items = fetchSheetRows();
 $filteredItems = filterSheetRows($items, $searchQuery, $statusFilter);
+$filteredItems = sortSheetRows($filteredItems, $sortBy, $sortDirection);
 
 if (isset($_GET['export']) && $_GET['export'] === 'csv') {
     exportRowsAsCsv($filteredItems);
@@ -394,7 +433,7 @@ $heroItem = $items[0] ?? null;
 $performers = array_slice($filteredItems, 0, 3);
 $renderStamp = date('Y-m-d H:i:s');
 
-$exportUrl = 'index.php?export=csv&search=' . urlencode($searchQuery) . '&status=' . urlencode($statusFilter);
+$exportUrl = 'index.php?export=csv&search=' . urlencode($searchQuery) . '&status=' . urlencode($statusFilter) . '&sort_by=' . urlencode($sortBy) . '&sort_dir=' . urlencode($sortDirection);
 ?>
 <!DOCTYPE html>
 <html lang="id">
@@ -431,11 +470,10 @@ $exportUrl = 'index.php?export=csv&search=' . urlencode($searchQuery) . '&status
         <main class="main-panel">
             <div class="topbar">
                 <div class="topbar-left">
-                    <a href="index.php" class="back-link">&#8592; Kembali</a>
-                    <nav class="top-menu">
-                        <a href="index.php" class="current">Dashboard</a>
-                    </nav>
-                </div>
+                        <nav class="top-menu">
+                            <a href="index.php" class="current">Dashboard</a>
+                        </nav>
+                    </div>
             </div>
 
             <?php if ($flash !== null): ?>
@@ -575,6 +613,22 @@ $exportUrl = 'index.php?export=csv&search=' . urlencode($searchQuery) . '&status
                                     <?php endforeach; ?>
                                 </select>
                             </div>
+                            <div>
+                                <label for="sort_by">Urutkan berdasarkan</label>
+                                <select id="sort_by" name="sort_by">
+                                    <option value="name" <?= $sortBy === 'name' ? 'selected' : '' ?>>Name</option>
+                                    <option value="email" <?= $sortBy === 'email' ? 'selected' : '' ?>>Email</option>
+                                    <option value="status" <?= $sortBy === 'status' ? 'selected' : '' ?>>Status</option>
+                                    <option value="id" <?= $sortBy === 'id' ? 'selected' : '' ?>>ID</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label for="sort_dir">Arah urutan</label>
+                                <select id="sort_dir" name="sort_dir">
+                                    <option value="asc" <?= $sortDirection === 'asc' ? 'selected' : '' ?>>A-Z / Kecil-Besar</option>
+                                    <option value="desc" <?= $sortDirection === 'desc' ? 'selected' : '' ?>>Z-A / Besar-Kecil</option>
+                                </select>
+                            </div>
                             <div class="filter-submit">
                                 <button type="submit" class="primary">Terapkan</button>
                             </div>
@@ -597,7 +651,7 @@ $exportUrl = 'index.php?export=csv&search=' . urlencode($searchQuery) . '&status
                                         <td><?= h((string) $item['id']) ?></td>
                                         <td><?= h($item['name']) ?></td>
                                         <td><?= h($item['email']) ?></td>
-                                        <td><span class="status-pill"><?= h($item['status']) ?></span></td>
+                                        <td><span class="status-pill" data-status="<?= h($item['status']) ?>"><?= h($item['status']) ?></span></td>
                                         <td class="action-cell">
                                             <a href="index.php?edit=<?= h((string) $item['id']) ?>" class="ghost">Edit</a>
                                             <form method="post" onsubmit="return confirm('Hapus data ini?')">
